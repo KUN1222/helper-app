@@ -1,0 +1,580 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { 
+  Zap, X, Play, Pause, Activity, Settings, 
+  LayoutDashboard, Users, Clock, Wifi, WifiOff, 
+  MessageSquare, Power, Plus, Trash2, Edit2, Shield, ScrollText,
+  ChevronLeft, ArrowLeft
+} from 'lucide-react';
+
+const MatrixHelperPlugin = () => {
+  const [isOpen, setIsOpen] = useState(true); 
+  const [activeTab, setActiveTab] = useState('workers'); 
+  const [showWhitelistModal, setShowWhitelistModal] = useState(false);
+  const queueScrollRef = useRef(null);
+  
+  // --- 模拟数据生成器 ---
+  const generateMockMessages = (count, sentIndex) => {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `msg_${i}`,
+      text: i < sentIndex 
+        ? `[Sent] 已发送的邀请话术示例 #${i+1}...` 
+        : `[Pending] 等待发送的新邀请语 #${i+1}，这是文案内容...`,
+      status: i < sentIndex ? 'sent' : 'pending'
+    }));
+  };
+
+  // --- 核心数据状态 ---
+  const [masterConfig, setMasterConfig] = useState({
+    status: 'running',      
+    targetFilter: 'online', 
+    globalInterval: 60,     
+    silentTime: 48, 
+  });
+
+  const [logs, setLogs] = useState([]);
+
+  const [workers, setWorkers] = useState(
+    Array.from({ length: 30 }, (_, i) => {
+      const total = 44;
+      const current = Math.floor(Math.random() * 40); 
+      return {
+        id: `ID_${1001 + i}`,
+        status: i === 3 ? 'banned' : i === 12 ? 'paused' : 'active',
+        freq: 30 + (i % 5) * 5,
+        msgIndex: current, 
+        totalMsgs: total,
+        successCount: Math.floor(Math.random() * 500), 
+        failCount: Math.floor(Math.random() * 20),     
+        messages: generateMockMessages(total, current) 
+      };
+    })
+  );
+
+  const [selectedWorkerId, setSelectedWorkerId] = useState(null);
+
+  // 获取当前选中的 Worker 对象
+  const selectedWorker = workers.find(w => w.id === selectedWorkerId);
+  
+  // 获取未选中的其他 Worker 列表 (用于下方滚动区)
+  const otherWorkers = useMemo(() => {
+    return workers.filter(w => w.id !== selectedWorkerId);
+  }, [workers, selectedWorkerId]);
+
+  // 修复 3: Queue 自动定位逻辑优化
+  useEffect(() => {
+    if (selectedWorkerId && queueScrollRef.current) {
+      setTimeout(() => {
+        const pendingMsg = queueScrollRef.current.querySelector('.msg-pending');
+        if (pendingMsg) {
+          pendingMsg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+      }, 200); 
+    }
+  }, [selectedWorkerId]);
+
+  // --- 模拟实时数据 ---
+  useEffect(() => {
+    if (masterConfig.status !== 'running') return;
+    const interval = setInterval(() => {
+      setWorkers(prev => prev.map(w => {
+        if (w.status !== 'active') return w;
+        if (Math.random() > 0.7) {
+          const isSuccess = Math.random() > 0.1;
+          const nextIndex = (w.msgIndex + 1) % w.totalMsgs;
+          
+          if (Math.random() > 0.6) {
+             const action = isSuccess ? 'Sending to' : 'Failed to send to';
+             const target = `User_${Math.floor(Math.random() * 9000) + 1000}`;
+             setLogs(prevLogs => [
+               ...prevLogs.slice(-19), 
+               { time: new Date().toLocaleTimeString(), id: w.id, msg: `${action} ${target}`, type: isSuccess ? 'success' : 'error' }
+             ]);
+          }
+
+          return {
+            ...w,
+            msgIndex: nextIndex,
+            successCount: isSuccess ? w.successCount + 1 : w.successCount,
+            failCount: isSuccess ? w.failCount : w.failCount + 1,
+            messages: w.messages.map((m, idx) => ({
+              ...m,
+              status: idx < nextIndex ? 'sent' : 'pending',
+              text: idx < nextIndex && !m.text.startsWith('[Sent]') ? `[Sent] ${m.text.substring(10)}` : m.text
+            }))
+          };
+        }
+        return w;
+      }));
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [masterConfig.status]);
+
+  const getHealthStatus = (worker) => {
+    if (worker.status === 'banned') return 'red';
+    const remaining = worker.totalMsgs - worker.msgIndex;
+    if (remaining < 5) return 'yellow';
+    return 'green';
+  };
+
+  const handleAddMessage = () => {
+    if (!selectedWorker) return;
+    setWorkers(prev => prev.map(w => {
+      if (w.id !== selectedWorkerId) return w;
+      let newMessages = [...w.messages];
+      let newIndex = w.msgIndex;
+      if (newIndex > 0) {
+        newMessages.shift();
+        newIndex--;
+      } else if (newMessages.length >= 44) {
+        alert("Queue is full of pending messages!");
+        return w;
+      }
+      newMessages.push({
+        id: `new_${Date.now()}`,
+        text: `[New] 新添加的邀请语...`,
+        status: 'pending'
+      });
+      return { ...w, msgIndex: newIndex, messages: newMessages };
+    }));
+  };
+
+  // 侧边栏单个 ID 卡片组件
+  const SidebarItem = ({ w, isSelected, onClick }) => {
+    const health = getHealthStatus(w);
+    return (
+      <div 
+        onClick={onClick}
+        className={`
+          h-[72px] shrink-0 flex flex-col justify-center px-3 cursor-pointer transition-all relative border-b border-zinc-800/30 box-border
+          ${isSelected 
+            ? 'bg-[#18181b] z-20 -mr-[1px] text-white shadow-[-4px_0_10px_rgba(0,0,0,0.2)] border-r-0' 
+            : 'text-zinc-500 hover:bg-zinc-800/50 hover:text-zinc-300 border-r border-zinc-800/50'}
+        `}
+      >
+        <div className="flex justify-between items-center mb-1">
+          <span className={`text-[10px] font-bold font-mono ${isSelected ? 'text-white' : 'text-zinc-500'}`}>{w.id.slice(-4)}</span>
+          <div className={`w-1.5 h-1.5 rounded-full ${health === 'green' ? 'bg-emerald-500' : health === 'yellow' ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
+        </div>
+        
+        <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden mb-1">
+          <div 
+            className={`h-full ${isSelected ? 'bg-indigo-500' : 'bg-zinc-600'}`}
+            style={{width: `${(w.msgIndex / w.totalMsgs) * 100}%`}}
+          />
+        </div>
+
+        <div className="flex justify-between items-center">
+          <span className="text-[9px] opacity-60">{w.freq}s</span>
+          <span className={`text-[8px] uppercase px-1 rounded ${w.status === 'active' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-zinc-800 text-zinc-600'}`}>{w.status}</span>
+        </div>
+
+        {isSelected && (
+          <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-indigo-500"></div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen w-full bg-gray-100/20 relative font-sans">
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+         <div className="text-center">
+            <h1 className="text-4xl font-bold text-gray-400">Target Website</h1>
+            <p className="text-xl text-gray-400 mt-2">Simulation Mode</p>
+         </div>
+      </div>
+
+      <div className="fixed bottom-6 right-6 z-[9999] flex flex-col items-end gap-4 text-zinc-300">
+        
+        {isOpen && (
+          <div className="w-[360px] h-[520px] max-h-[85vh] bg-[#18181b] border border-zinc-700 rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 fade-in duration-200 ring-1 ring-black/50">
+            
+            {/* Header */}
+            <div className="bg-zinc-800/90 backdrop-blur p-3 border-b border-zinc-700 shrink-0 flex justify-between items-center select-none h-[50px]">
+              <div className="flex items-center gap-2">
+                <div className="w-6 h-6 bg-indigo-600 rounded flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                  <Zap className="w-3.5 h-3.5 text-white" fill="currentColor" />
+                </div>
+                <div>
+                  <h1 className="text-sm font-bold text-white leading-none">Matrix Helper</h1>
+                  <div className="text-[10px] text-zinc-400 mt-0.5 flex gap-1">
+                    Master: <span className="text-indigo-400 font-mono">Anna_01</span>
+                  </div>
+                </div>
+              </div>
+              <button onClick={() => setIsOpen(false)} className="text-zinc-500 hover:text-white"><X className="w-4 h-4" /></button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex bg-zinc-900 border-b border-zinc-700 shrink-0 select-none h-[40px]">
+              {[
+                { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+                { id: 'workers', label: 'ID Manager', icon: Users }, 
+                { id: 'master', label: 'Master Set', icon: Settings }, 
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex-1 text-[11px] font-bold uppercase tracking-wide flex items-center justify-center gap-1.5 transition-all relative
+                  ${activeTab === tab.id ? 'bg-[#202023] text-indigo-400' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'}`}
+                >
+                  <tab.icon className="w-3.5 h-3.5" />
+                  {tab.label}
+                  {activeTab === tab.id && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.6)]"></div>}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex-1 overflow-hidden bg-[#09090b] relative">
+              
+              {/* === Tab 1: Dashboard === */}
+              {activeTab === 'dashboard' && (
+                <div className="h-full overflow-y-auto custom-scrollbar p-4 space-y-4">
+                  <div className="bg-gradient-to-br from-zinc-800 to-zinc-900 rounded-lg p-4 border border-zinc-700 shadow-md">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5 mb-1">
+                          <Activity className="w-3 h-3" /> System Status
+                        </div>
+                        <div className={`text-xs font-bold flex items-center gap-1.5
+                          ${masterConfig.status === 'running' ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                          <div className={`w-2 h-2 rounded-full ${masterConfig.status === 'running' ? 'bg-emerald-400 animate-pulse' : 'bg-yellow-400'}`}></div>
+                          {masterConfig.status === 'running' ? 'SYSTEM ONLINE' : 'SYSTEM PAUSED'}
+                        </div>
+                      </div>
+                      <button 
+                         onClick={() => setMasterConfig(prev => ({...prev, status: prev.status === 'running' ? 'paused' : 'running'}))}
+                         className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all shadow-lg
+                         ${masterConfig.status === 'running' 
+                           ? 'bg-zinc-800 text-red-400 border-red-900/50 hover:bg-red-900/20' 
+                           : 'bg-emerald-600 text-white border-emerald-500 hover:bg-emerald-500'}`}
+                       >
+                         {masterConfig.status === 'running' ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                       </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                       <div className="bg-black/20 rounded p-2 border border-zinc-800">
+                          <div className="text-[10px] text-zinc-500 uppercase">Success</div>
+                          <div className="text-lg font-mono font-bold text-emerald-400">
+                            {workers.reduce((acc, w) => acc + w.successCount, 0).toLocaleString()}
+                          </div>
+                       </div>
+                       <div className="bg-black/20 rounded p-2 border border-zinc-800">
+                          <div className="text-[10px] text-zinc-500 uppercase">Failed</div>
+                          <div className="text-lg font-mono font-bold text-red-400">
+                            {workers.reduce((acc, w) => acc + w.failCount, 0).toLocaleString()}
+                          </div>
+                       </div>
+                    </div>
+                    
+                    <div className="mt-2 pt-2 border-t border-zinc-700/50 flex justify-between items-center">
+                      <span className="text-[10px] text-zinc-500 uppercase font-bold">Total Throughput</span>
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-sm font-mono font-bold text-white">~840</span>
+                        <span className="text-[9px] text-zinc-500">msgs/hr</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                     <div className="flex justify-between items-center mb-2 px-1">
+                       <span className="text-xs font-bold text-zinc-400 uppercase">Matrix Health</span>
+                       <span className="text-[10px] font-mono text-zinc-500">
+                         {workers.filter(w => w.status === 'active').length}/{workers.length} Active
+                       </span>
+                     </div>
+                     <div className="grid grid-cols-6 gap-2 bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
+                        {workers.map((w, i) => {
+                          const health = getHealthStatus(w);
+                          return (
+                            <div key={i} className="group relative flex justify-center">
+                               <div className={`w-2.5 h-2.5 rounded-full transition-all duration-300 cursor-help
+                                 ${health === 'green' ? 'bg-emerald-500' : 
+                                   health === 'yellow' ? 'bg-yellow-500 animate-pulse' : 'bg-red-600'}`} 
+                               />
+                            </div>
+                          );
+                        })}
+                     </div>
+                  </div>
+
+                  <div className="bg-[#0c0c0e] rounded border border-zinc-800 p-2 font-mono text-[10px]">
+                    <div className="flex items-center gap-2 mb-2 border-b border-zinc-800/50 pb-1">
+                      <ScrollText className="w-3 h-3 text-emerald-500" />
+                      <span className="text-zinc-400 uppercase font-bold text-[9px]">Live Activity Logs</span>
+                    </div>
+                    <div className="h-40 overflow-y-auto custom-scrollbar space-y-1">
+                      {logs.map((log, i) => (
+                        <div key={i} className="flex gap-2 items-center px-1 border-b border-zinc-800/20 pb-0.5 last:border-0">
+                          <span className="text-zinc-600 w-12 shrink-0">{log.time}</span>
+                          <span className={`font-bold ${log.type === 'success' ? 'text-indigo-400' : 'text-red-400'}`}>{log.id}</span>
+                          <span className="text-zinc-400 truncate">{log.msg}</span>
+                        </div>
+                      ))}
+                      {logs.length === 0 && <span className="text-zinc-700 px-1 italic">Waiting for activity...</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* === Tab 2: ID Manager (Fixed + Scroll Layout) === */}
+              {activeTab === 'workers' && (
+                <div className="h-full flex flex-col">
+                  
+                  {/* State 1: No Selection (Full List) */}
+                  {!selectedWorkerId ? (
+                    <div className="flex-1 overflow-y-auto custom-scrollbar p-1 bg-[#09090b]">
+                      {workers.map(w => (
+                        <div key={w.id} className="mb-2 p-3 rounded-lg border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800 h-[72px] flex items-center justify-between cursor-pointer transition-colors" onClick={() => setSelectedWorkerId(w.id)}>
+                           <div className="flex items-center gap-3">
+                              <div className={`w-2 h-8 rounded-full ${getHealthStatus(w) === 'green' ? 'bg-emerald-500' : getHealthStatus(w) === 'yellow' ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                   <span className="text-xs font-bold text-zinc-200 font-mono">{w.id}</span>
+                                   <span className={`text-[9px] px-1 rounded uppercase ${w.status === 'active' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}`}>{w.status}</span>
+                                </div>
+                                <div className="text-[10px] text-zinc-500 mt-0.5">Freq: {w.freq}s</div>
+                              </div>
+                           </div>
+                           <div className="flex flex-col items-end gap-1">
+                              <div className="text-[10px] text-indigo-300 font-mono font-bold">#{w.msgIndex + 1} / {w.totalMsgs}</div>
+                              <div className="w-24 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                                <div className="h-full bg-indigo-500" style={{width: `${(w.msgIndex / w.totalMsgs) * 100}%`}} />
+                              </div>
+                           </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    // State 2: Selected (Fixed Top Left Item + Scrollable Bottom List)
+                    <div className="flex-1 flex overflow-hidden bg-[#09090b]">
+                      
+                      {/* Left: Sidebar */}
+                      <div className="w-[120px] bg-black/40 flex flex-col shrink-0">
+                         {selectedWorker && (
+                           <SidebarItem 
+                             w={selectedWorker} 
+                             isSelected={true} 
+                             onClick={() => {}} 
+                           />
+                         )}
+                         <div className="flex-1 overflow-y-auto custom-scrollbar no-scrollbar border-r border-zinc-800/50">
+                           {otherWorkers.map(w => (
+                             <SidebarItem 
+                               key={w.id} 
+                               w={w} 
+                               isSelected={false} 
+                               onClick={() => setSelectedWorkerId(w.id)} 
+                             />
+                           ))}
+                         </div>
+                      </div>
+
+                      {/* Right: Detail View */}
+                      <div className="flex-1 bg-[#18181b] flex flex-col relative overflow-hidden z-10 shadow-[-5px_0_15px_rgba(0,0,0,0.1)]">
+                         {selectedWorker && (
+                           <>
+                             {/* Header - Update: Evenly spaced, wider freq box */}
+                             <div className="h-[72px] border-b border-zinc-800 flex items-center gap-2 px-3 bg-[#18181b] shrink-0 box-border w-full">
+                               
+                               {/* 1. Frequency (Wider w-12) */}
+                               <div className="h-8 flex items-center bg-zinc-900 border border-zinc-700 rounded px-2">
+                                 <span className="text-[9px] text-zinc-500 uppercase font-bold mr-1">Freq</span>
+                                 <input type="number" defaultValue={selectedWorker.freq} className="bg-transparent w-12 text-xs text-right text-white font-mono outline-none" />
+                                 <span className="text-[9px] text-zinc-500 ml-0.5">s</span>
+                               </div>
+
+                               {/* 2. Whitelist */}
+                               <button onClick={() => setShowWhitelistModal(true)} className="h-8 w-8 flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 rounded text-zinc-300 transition-colors" title="Whitelist">
+                                 <Shield className="w-4 h-4" />
+                               </button>
+
+                               {/* 3. Start/Stop */}
+                               <button className="h-8 w-8 flex items-center justify-center bg-red-900/10 hover:bg-red-900/30 border border-red-900/30 rounded text-red-400 transition-colors" title="Start/Stop">
+                                 <Power className="w-4 h-4" />
+                               </button>
+
+                               {/* 4. Return */}
+                               <button 
+                                 onClick={() => setSelectedWorkerId(null)}
+                                 className="h-8 w-8 flex items-center justify-center rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors"
+                                 title="Return to List"
+                               >
+                                 <ChevronLeft className="w-5 h-5 rotate-180" /> 
+                               </button>
+                             </div>
+
+                             {/* Queue Section */}
+                             <div className="flex-1 flex flex-col overflow-hidden bg-[#0c0c0e]">
+                                <div className="px-3 py-2 bg-[#18181b] border-b border-zinc-800 flex justify-between items-center shrink-0">
+                                   <label className="text-[10px] font-bold text-zinc-500 uppercase flex items-center gap-1">
+                                     <MessageSquare className="w-3 h-3" /> Queue
+                                   </label>
+                                   <button onClick={handleAddMessage} className="text-[9px] bg-indigo-600 hover:bg-indigo-500 text-white px-2 py-0.5 rounded flex items-center gap-1">
+                                     <Plus className="w-2.5 h-2.5" /> Add
+                                   </button>
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-2" ref={queueScrollRef}>
+                                   {selectedWorker.messages.map((msg, idx) => {
+                                      const isSent = idx < selectedWorker.msgIndex;
+                                      return (
+                                        <div key={idx} className={`text-[10px] p-2 rounded border flex gap-2 items-start transition-all relative
+                                          ${isSent 
+                                            ? 'bg-zinc-900/30 border-zinc-800/50 text-zinc-600' 
+                                            : 'bg-zinc-800 border-zinc-700 text-zinc-300 msg-pending shadow-sm'}`}
+                                        >
+                                          <div className={`font-mono text-[9px] w-5 shrink-0 pt-0.5 ${isSent ? 'opacity-30' : 'text-indigo-400 font-bold'}`}>#{idx+1}</div>
+                                          <div className="flex-1 break-words leading-tight">
+                                            {msg.text}
+                                          </div>
+                                          {!isSent && (
+                                            <div className="flex flex-col gap-1 shrink-0 opacity-50 hover:opacity-100 transition-opacity">
+                                              <button className="text-zinc-500 hover:text-indigo-400"><Edit2 className="w-3 h-3" /></button>
+                                              <button className="text-zinc-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )
+                                   })}
+                                   <div className="h-4"></div>
+                                </div>
+                             </div>
+                           </>
+                         )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* === Tab 3: Master Set === */}
+              {activeTab === 'master' && (
+                <div className="p-4 space-y-5 h-full overflow-y-auto custom-scrollbar">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-400 uppercase flex items-center gap-2">
+                      <Users className="w-3.5 h-3.5" /> Target Scope
+                    </label>
+                    <div className="grid grid-cols-3 gap-2 bg-zinc-900/50 p-1 rounded-lg border border-zinc-800">
+                      {['online', 'offline', 'all'].map(mode => (
+                        <button
+                          key={mode}
+                          onClick={() => setMasterConfig(prev => ({...prev, targetFilter: mode}))}
+                          className={`py-2 rounded-md text-[10px] font-bold uppercase transition-all flex flex-col items-center gap-1
+                          ${masterConfig.targetFilter === mode 
+                            ? 'bg-zinc-800 text-white shadow-sm ring-1 ring-zinc-600' 
+                            : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}
+                        >
+                          {mode === 'online' ? <Wifi className="w-3 h-3" /> : 
+                           mode === 'offline' ? <WifiOff className="w-3 h-3" /> : 
+                           <Users className="w-3 h-3" />}
+                          {mode}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-400 uppercase flex items-center gap-2">
+                      <Clock className="w-3.5 h-3.5" /> Message TTL
+                    </label>
+                    <div className="flex items-center gap-3 bg-zinc-800 p-3 rounded-lg border border-zinc-700">
+                      <input 
+                        type="range" 
+                        min="30" max="300" step="10"
+                        value={masterConfig.globalInterval}
+                        onChange={(e) => setMasterConfig(prev => ({...prev, globalInterval: Number(e.target.value)}))}
+                        className="flex-1 accent-indigo-500 h-1.5 bg-zinc-600 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <div className="font-mono text-sm font-bold text-white w-14 text-center bg-zinc-900 rounded py-1 border border-zinc-700">
+                        {masterConfig.globalInterval}s
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-400 uppercase flex items-center gap-2">
+                      <WifiOff className="w-3.5 h-3.5" /> Silent Time (Cooldown)
+                    </label>
+                    <div className="bg-zinc-800 p-3 rounded-lg border border-zinc-700">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-[10px] text-zinc-500">ID - Customer Cooldown</span>
+                        <span className="text-xs font-bold text-indigo-400 font-mono">{masterConfig.silentTime} Hours</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="1" max="72" step="1"
+                        value={masterConfig.silentTime}
+                        onChange={(e) => setMasterConfig(prev => ({...prev, silentTime: Number(e.target.value)}))}
+                        className="w-full accent-indigo-500 h-1.5 bg-zinc-600 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <p className="text-[9px] text-zinc-500 mt-2 leading-relaxed">
+                        Do not send messages to the same customer within this period calculated from the last interaction.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+            
+            {/* Whitelist Modal */}
+            {showWhitelistModal && (
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm z-50 flex flex-col p-4 animate-in fade-in duration-200">
+                <div className="flex justify-between items-center mb-4 border-b border-zinc-700 pb-2">
+                  <h3 className="font-bold text-white flex items-center gap-2"><Shield className="w-4 h-4 text-emerald-500"/> Whitelist</h3>
+                  <button onClick={() => setShowWhitelistModal(false)}><X className="w-4 h-4 text-zinc-400"/></button>
+                </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                   <p className="text-xs text-zinc-500 mb-2">IDs in this list will never receive messages from {selectedWorkerId}.</p>
+                   <div className="space-y-2">
+                     {['user_778899', 'user_112233', 'user_admin_01'].map(u => (
+                       <div key={u} className="bg-zinc-900 border border-zinc-700 p-2 rounded flex justify-between items-center">
+                         <span className="text-xs font-mono text-zinc-300">{u}</span>
+                         <button className="text-red-400 hover:text-red-300"><Trash2 className="w-3 h-3"/></button>
+                       </div>
+                     ))}
+                     <button className="w-full py-2 border border-dashed border-zinc-700 text-zinc-500 text-xs rounded hover:bg-zinc-800 hover:text-zinc-300">
+                       + Add User ID
+                     </button>
+                   </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+        )}
+
+        {/* FAB */}
+        <button 
+          onClick={() => setIsOpen(!isOpen)}
+          className={`w-14 h-14 rounded-full shadow-2xl flex items-center justify-center transition-all duration-300 hover:scale-110 active:scale-95 z-[9999] relative
+          ${isOpen 
+            ? 'bg-zinc-800 text-zinc-400 border border-zinc-600 rotate-90' 
+            : 'bg-indigo-600 text-white shadow-indigo-600/50 border border-indigo-400/20'}`}
+        >
+          {isOpen ? <X className="w-6 h-6" /> : <Zap className="w-7 h-7 fill-current" />}
+        </button>
+      </div>
+
+      {/* Global Styles for Scrollbar Hiding */}
+      <style>{`
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 2px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #52525b; }
+        
+        .no-scrollbar::-webkit-scrollbar {
+          display: none;
+        }
+        .no-scrollbar {
+          -ms-overflow-style: none;  /* IE and Edge */
+          scrollbar-width: none;  /* Firefox */
+        }
+      `}</style>
+    </div>
+  );
+};
+
+export default MatrixHelperPlugin;
